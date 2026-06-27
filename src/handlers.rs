@@ -3,6 +3,7 @@ use crate::ledger::{
     record_payout_event, write_ledger,
 };
 use crate::outbox::enqueue_outbox;
+use crate::sentry_util;
 use crate::state::SharedState;
 use crate::stripe::{create_account_link, create_checkout_session, create_express_account, verify_signature};
 use axum::{
@@ -163,15 +164,30 @@ pub async fn stripe_webhook(
         }
     }
 
-    let event: serde_json::Value =
-        serde_json::from_str(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let event: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            sentry_util::capture_error(&e, &[("handler", "stripe_webhook"), ("stage", "parse")]);
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    };
     let event_id = event["id"].as_str().unwrap_or("unknown");
     let event_type = event["type"].as_str().unwrap_or("unknown");
 
-    let mut tx = state.pool.begin().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let is_new = record_payout_event(&mut tx, event_id, event_type, &event)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut tx = match state.pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            sentry_util::capture_error(&e, &[("handler", "stripe_webhook"), ("stage", "begin_tx")]);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+    let is_new = match record_payout_event(&mut tx, event_id, event_type, &event).await {
+        Ok(v) => v,
+        Err(e) => {
+            sentry_util::capture_error(&e, &[("handler", "stripe_webhook"), ("stage", "record_event")]);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
 
     if !is_new {
         tx.commit().await.ok();
@@ -180,7 +196,9 @@ pub async fn stripe_webhook(
 
     match event_type {
         "checkout.session.completed" => {
-            process_checkout_completed(&state, &mut tx, &event, event_id).await?;
+            if let Err(status) = process_checkout_completed(&state, &mut tx, &event, event_id).await {
+                return Err(status);
+            }
         }
         "account.updated" => {
             tracing::info!(
@@ -191,10 +209,14 @@ pub async fn stripe_webhook(
         _ => {}
     }
 
-    mark_payout_processed(&mut tx, event_id)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    tx.commit().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if let Err(e) = mark_payout_processed(&mut tx, event_id).await {
+        sentry_util::capture_error(&e, &[("handler", "stripe_webhook"), ("stage", "mark_processed")]);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    if let Err(e) = tx.commit().await {
+        sentry_util::capture_error(&e, &[("handler", "stripe_webhook"), ("stage", "commit")]);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
 
     Ok(StatusCode::OK)
 }
@@ -217,7 +239,7 @@ async fn process_checkout_completed(
     let payment_intent = obj["payment_intent"].as_str();
     let transfer_id = obj["transfer"].as_str();
 
-    let inserted = write_ledger(
+    let inserted = match write_ledger(
         &mut **tx,
         &format!("stripe:{}", event_id),
         "checkout.completed",
@@ -231,10 +253,19 @@ async fn process_checkout_completed(
         transfer_id,
     )
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    {
+        Ok(v) => v,
+        Err(e) => {
+            sentry_util::capture_error(
+                &e,
+                &[("handler", "stripe_webhook"), ("stage", "write_ledger")],
+            );
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
 
     if inserted {
-        enqueue_outbox(
+        if let Err(e) = enqueue_outbox(
             &mut **tx,
             "payout.recorded",
             &serde_json::json!({
@@ -245,7 +276,13 @@ async fn process_checkout_completed(
             }),
         )
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        {
+            sentry_util::capture_error(
+                &e,
+                &[("handler", "stripe_webhook"), ("stage", "enqueue_outbox")],
+            );
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
 
         let users_url = state.users_url.clone();
         let enrollment_id = enrollment_id.to_string();

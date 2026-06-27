@@ -2,6 +2,7 @@ mod handlers;
 mod ledger;
 mod metrics_middleware;
 mod outbox;
+mod sentry_util;
 mod state;
 mod stripe;
 
@@ -13,10 +14,15 @@ use metrics::describe_counter;
 use sqlx::postgres::PgPoolOptions;
 use state::{AppState, SharedState};
 use std::sync::Arc;
+use tracing_subscriber::prelude::*;
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
+    let _sentry = sentry_util::init_sentry("payments");
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer())
+        .with(sentry::integrations::tracing::layer())
+        .init();
     describe_counter!("ledger_writes_total", "Total ledger writes");
     describe_counter!("stripe_webhook_errors_total", "Stripe webhook errors");
 
