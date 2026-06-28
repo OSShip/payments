@@ -22,7 +22,12 @@ pub fn init_sentry(service_name: &str) -> Option<sentry::ClientInitGuard> {
         traces_sample_rate: sample_rate,
         ..Default::default()
     });
+    tracing::info!(service = service_name, "sentry initialized with structured logs");
     Some(guard)
+}
+
+pub fn is_enabled() -> bool {
+    ENABLED.load(Ordering::Relaxed)
 }
 
 pub fn capture_error(err: &dyn std::error::Error, tags: &[(&str, &str)]) {
@@ -36,5 +41,41 @@ pub fn capture_error(err: &dyn std::error::Error, tags: &[(&str, &str)]) {
             }
         },
         || sentry::capture_error(err),
+    );
+}
+
+pub fn log_info(message: &str, tags: &[(&str, &str)]) {
+    tracing::info!(message);
+    if !ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    sentry::with_scope(
+        |scope| {
+            for (k, v) in tags {
+                scope.set_tag(k, *v);
+            }
+            scope.set_level(Some(sentry::Level::Info));
+        },
+        || {
+            sentry::capture_message(message, sentry::Level::Info);
+        },
+    );
+}
+
+pub fn log_warn(message: &str, tags: &[(&str, &str)]) {
+    tracing::warn!(message);
+    if !ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    sentry::with_scope(
+        |scope| {
+            for (k, v) in tags {
+                scope.set_tag(k, *v);
+            }
+            scope.set_level(Some(sentry::Level::Warning));
+        },
+        || {
+            sentry::capture_message(message, sentry::Level::Warning);
+        },
     );
 }

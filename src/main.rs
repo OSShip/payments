@@ -14,14 +14,24 @@ use metrics::describe_counter;
 use sqlx::postgres::PgPoolOptions;
 use state::{AppState, SharedState};
 use std::sync::Arc;
+use sentry::integrations::tracing::EventFilter;
 use tracing_subscriber::prelude::*;
 
 #[tokio::main]
 async fn main() {
     let _sentry = sentry_util::init_sentry("payments");
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     tracing_subscriber::registry()
+        .with(env_filter)
         .with(tracing_subscriber::fmt::layer())
-        .with(sentry::integrations::tracing::layer())
+        .with(sentry::integrations::tracing::layer().event_filter(|metadata| {
+            match *metadata.level() {
+                tracing::Level::ERROR => EventFilter::Event,
+                tracing::Level::WARN | tracing::Level::INFO => EventFilter::Breadcrumb,
+                _ => EventFilter::Ignore,
+            }
+        }))
         .init();
     describe_counter!("ledger_writes_total", "Total ledger writes");
     describe_counter!("stripe_webhook_errors_total", "Stripe webhook errors");
@@ -63,6 +73,7 @@ async fn main() {
 
     let kafka_brokers =
         std::env::var("KAFKA_BROKERS").unwrap_or_else(|_| "kafka:9092".into());
+    tracing::info!(brokers = %kafka_brokers, "starting outbox worker");
     outbox::spawn_outbox_worker(pool.clone(), kafka_brokers.clone());
 
     let state: SharedState = Arc::new(AppState {
@@ -80,6 +91,12 @@ async fn main() {
         app_base_url: std::env::var("APP_BASE_URL")
             .unwrap_or_else(|_| "http://localhost".into()),
     });
+
+    if !state.stripe_configured() {
+        tracing::warn!("Stripe not configured, mock checkout mode enabled");
+    } else {
+        tracing::info!("Stripe configured for live checkout");
+    }
 
     let recorder = metrics_exporter_prometheus::PrometheusBuilder::new()
         .install_recorder()

@@ -65,14 +65,24 @@ pub async fn checkout(
 ) -> Result<Json<CheckoutResponse>, StatusCode> {
     let user_id = headers.get("X-User-Id").and_then(|v| v.to_str().ok());
     if user_id != Some(req.student_id.as_str()) {
+        tracing::warn!(student_id = %req.student_id, "checkout forbidden");
         return Err(StatusCode::FORBIDDEN);
     }
+
+    tracing::info!(
+        listing_id = %req.listing_id,
+        student_id = %req.student_id,
+        mentor_id = %req.mentor_id,
+        amount_cents = req.amount_cents,
+        "checkout requested"
+    );
 
     let gross = req.amount_cents as i32;
     let (fee, payout) = fee_breakdown(gross, state.platform_fee_percent);
     let session_id = format!("cs_test_{}", Uuid::new_v4());
 
     if !state.stripe_configured() {
+        tracing::info!(session_id = %session_id, "mock checkout completed");
         let mut tx = state.pool.begin().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         write_ledger(
             &mut *tx,
