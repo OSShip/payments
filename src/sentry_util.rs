@@ -1,3 +1,4 @@
+use sentry::integrations::tracing::EventFilter;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
@@ -20,14 +21,22 @@ pub fn init_sentry(service_name: &str) -> Option<sentry::ClientInitGuard> {
         environment: Some(environment.into()),
         server_name: Some(service_name.to_string().into()),
         traces_sample_rate: sample_rate,
+        enable_logs: true,
         ..Default::default()
     });
-    tracing::info!(service = service_name, "sentry initialized with structured logs");
     Some(guard)
 }
 
 pub fn is_enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
+}
+
+pub fn tracing_event_filter(metadata: &tracing::Metadata<'_>) -> EventFilter {
+    match *metadata.level() {
+        tracing::Level::ERROR => EventFilter::Event | EventFilter::Log,
+        tracing::Level::TRACE => EventFilter::Ignore,
+        _ => EventFilter::Breadcrumb | EventFilter::Log,
+    }
 }
 
 pub fn capture_error(err: &dyn std::error::Error, tags: &[(&str, &str)]) {

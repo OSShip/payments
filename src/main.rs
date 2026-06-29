@@ -14,7 +14,6 @@ use metrics::describe_counter;
 use sqlx::postgres::PgPoolOptions;
 use state::{AppState, SharedState};
 use std::sync::Arc;
-use sentry::integrations::tracing::EventFilter;
 use tracing_subscriber::prelude::*;
 
 #[tokio::main]
@@ -25,14 +24,14 @@ async fn main() {
     tracing_subscriber::registry()
         .with(env_filter)
         .with(tracing_subscriber::fmt::layer())
-        .with(sentry::integrations::tracing::layer().event_filter(|metadata| {
-            match *metadata.level() {
-                tracing::Level::ERROR => EventFilter::Event,
-                tracing::Level::WARN | tracing::Level::INFO => EventFilter::Breadcrumb,
-                _ => EventFilter::Ignore,
-            }
-        }))
+        .with(
+            sentry::integrations::tracing::layer()
+                .event_filter(sentry_util::tracing_event_filter),
+        )
         .init();
+    if sentry_util::is_enabled() {
+        tracing::info!(service = "payments", "sentry initialized with structured logs");
+    }
     describe_counter!("ledger_writes_total", "Total ledger writes");
     describe_counter!("stripe_webhook_errors_total", "Stripe webhook errors");
 
