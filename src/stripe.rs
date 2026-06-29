@@ -49,7 +49,10 @@ pub async fn create_checkout_session(
         ("cancel_url", cancel_url),
         ("line_items[0][price_data][currency]", "usd"),
         ("line_items[0][price_data][unit_amount]", &amount),
-        ("line_items[0][price_data][product_data][name]", "Mentorship Slot"),
+        (
+            "line_items[0][price_data][product_data][name]",
+            "Mentorship Slot",
+        ),
         ("line_items[0][quantity]", "1"),
         ("metadata[listing_id]", listing_id),
         ("metadata[student_id]", student_id),
@@ -74,13 +77,16 @@ pub async fn create_checkout_session(
         .await
 }
 
-pub async fn create_express_account(stripe_key: &str, email: &str) -> Result<String, reqwest::Error> {
+pub async fn create_express_account(
+    stripe_key: &str,
+    email: &str,
+) -> Result<String, reqwest::Error> {
     let client = reqwest::Client::new();
     let body: serde_json::Value = client
         .post("https://api.stripe.com/v1/accounts")
         .basic_auth(stripe_key, None::<&str>)
         .form(&[
-            ("type", "express"),
+            ("business_type", "individual"),
             ("email", email),
             ("capabilities[card_payments][requested]", "true"),
             ("capabilities[transfers][requested]", "true"),
@@ -112,5 +118,6 @@ pub async fn create_account_link(
         .await?
         .json()
         .await?;
+    tracing::info!("Stripe api response {}", &body);
     Ok(body["url"].as_str().unwrap_or_default().to_string())
 }

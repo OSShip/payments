@@ -17,10 +17,10 @@ pub type SharedState = Arc<AppState>;
 
 impl AppState {
     pub fn stripe_configured(&self) -> bool {
-        !self.stripe_key.is_empty() && !self.stripe_key.starts_with("sk_test_...")
+        !self.stripe_key.is_empty() 
     }
 
     pub fn webhook_configured(&self) -> bool {
-        !self.webhook_secret.is_empty() && !self.webhook_secret.starts_with("whsec_...")
+        !self.webhook_secret.is_empty() 
     }
 }

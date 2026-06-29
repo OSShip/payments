@@ -5,7 +5,9 @@ use crate::ledger::{
 use crate::outbox::enqueue_outbox;
 use crate::sentry_util;
 use crate::state::SharedState;
-use crate::stripe::{create_account_link, create_checkout_session, create_express_account, verify_signature};
+use crate::stripe::{
+    create_account_link, create_checkout_session, create_express_account, verify_signature,
+};
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
@@ -83,7 +85,11 @@ pub async fn checkout(
 
     if !state.stripe_configured() {
         tracing::info!(session_id = %session_id, "mock checkout completed");
-        let mut tx = state.pool.begin().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let mut tx = state
+            .pool
+            .begin()
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         write_ledger(
             &mut *tx,
             &format!("checkout:{}", session_id),
@@ -112,7 +118,9 @@ pub async fn checkout(
         )
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        tx.commit().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        tx.commit()
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         activate_enrollment(&state.users_url, &req.enrollment_id, &session_id).await;
 
@@ -147,14 +155,8 @@ pub async fn checkout(
     }
 
     Ok(Json(CheckoutResponse {
-        checkout_url: body["url"]
-            .as_str()
-            .unwrap_or(&req.success_url)
-            .to_string(),
-        session_id: body["id"]
-            .as_str()
-            .unwrap_or(&session_id)
-            .to_string(),
+        checkout_url: body["url"].as_str().unwrap_or(&req.success_url).to_string(),
+        session_id: body["id"].as_str().unwrap_or(&session_id).to_string(),
     }))
 }
 
@@ -163,6 +165,9 @@ pub async fn stripe_webhook(
     headers: HeaderMap,
     body: String,
 ) -> Result<StatusCode, StatusCode> {
+
+    tracing::info!("WEBHOOK trigger");
+
     if state.webhook_configured() {
         let sig = headers
             .get("stripe-signature")
@@ -194,7 +199,10 @@ pub async fn stripe_webhook(
     let is_new = match record_payout_event(&mut tx, event_id, event_type, &event).await {
         Ok(v) => v,
         Err(e) => {
-            sentry_util::capture_error(&e, &[("handler", "stripe_webhook"), ("stage", "record_event")]);
+            sentry_util::capture_error(
+                &e,
+                &[("handler", "stripe_webhook"), ("stage", "record_event")],
+            );
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
     };
@@ -206,7 +214,8 @@ pub async fn stripe_webhook(
 
     match event_type {
         "checkout.session.completed" => {
-            if let Err(status) = process_checkout_completed(&state, &mut tx, &event, event_id).await {
+            if let Err(status) = process_checkout_completed(&state, &mut tx, &event, event_id).await
+            {
                 return Err(status);
             }
         }
@@ -220,7 +229,10 @@ pub async fn stripe_webhook(
     }
 
     if let Err(e) = mark_payout_processed(&mut tx, event_id).await {
-        sentry_util::capture_error(&e, &[("handler", "stripe_webhook"), ("stage", "mark_processed")]);
+        sentry_util::capture_error(
+            &e,
+            &[("handler", "stripe_webhook"), ("stage", "mark_processed")],
+        );
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
     if let Err(e) = tx.commit().await {
@@ -378,19 +390,30 @@ pub async fn connect_onboard(
 
     let account_id = match mentor_stripe_account(&state, user_id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    {
+        .map_err(|err| {
+            tracing::info!("Something went bad: {}", err);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })? {
         Some(id) => id,
         None => {
+            tracing::info!("creating stripe account for {}", &email);
             let id = create_express_account(&state.stripe_key, &email)
                 .await
-                .map_err(|_| StatusCode::BAD_GATEWAY)?;
+                .map_err(|err| {
+                    tracing::error!("create stripe account error :{}", &err);
+                    StatusCode::BAD_GATEWAY
+                })?;
             save_mentor_stripe_account(&state, user_id, &id)
                 .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                .map_err(|err| {
+                    tracing::error!("save mentor stripe account error :{}", &err);
+                    StatusCode::INTERNAL_SERVER_ERROR
+                })?;
             id
         }
     };
+
+    tracing::info!("Stripe Account id of {} is {}", &email, &account_id);
 
     let url = create_account_link(
         &state.stripe_key,
@@ -433,12 +456,13 @@ async fn mentor_stripe_account(
     state: &SharedState,
     mentor_id: &str,
 ) -> Result<Option<String>, sqlx::Error> {
-    sqlx::query_scalar(
+    sqlx::query_scalar::<_, Option<String>>(
         "SELECT stripe_connect_account_id FROM users WHERE id = $1::uuid",
     )
     .bind(mentor_id)
     .fetch_optional(&state.general_pool)
     .await
+    .map(|opt| opt.flatten())
 }
 
 async fn save_mentor_stripe_account(
