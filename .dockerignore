@@ -1,0 +1,18 @@
+# Built inside the image
+target/
+
+# Git and IDE
+.git
+.idea
+.vscode
+.cursor
+
+# Secrets
+.env
+.env.*
+
+# Logs
+*.log
+
+# OS
+.DS_Store
