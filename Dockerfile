@@ -12,7 +12,10 @@ RUN test "$(stat -c%s target/release/payments)" -gt 1000000
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates libssl3 zlib1g libcurl4 libsasl2-2 wget \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -g 1001 osship \
+    && useradd -u 1001 -g osship -s /usr/sbin/nologin osship
 COPY --from=builder /app/target/release/payments /payments
+USER 1001
 EXPOSE 8087
 CMD ["/payments"]

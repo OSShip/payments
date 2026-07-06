@@ -35,12 +35,10 @@ async fn main() {
     describe_counter!("ledger_writes_total", "Total ledger writes");
     describe_counter!("stripe_webhook_errors_total", "Stripe webhook errors");
 
-    let database_url = std::env::var("DATABASE_URL_PAYMENTS").unwrap_or_else(|_| {
-        "postgres://osship:osship_secret@postgres:5432/osship?sslmode=disable".into()
-    });
-    let general_url = std::env::var("DATABASE_URL_GENERAL").unwrap_or_else(|_| {
-        "postgres://osship:osship_secret@postgres:5432/osship?sslmode=disable".into()
-    });
+    let database_url = std::env::var("DATABASE_URL_PAYMENTS")
+        .expect("DATABASE_URL_PAYMENTS must be set");
+    let general_url = std::env::var("DATABASE_URL_GENERAL")
+        .expect("DATABASE_URL_GENERAL must be set");
 
     let pool = PgPoolOptions::new()
         .max_connections(5)
